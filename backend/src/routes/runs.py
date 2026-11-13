@@ -16,3 +16,7 @@ def detail(id:str,db=Depends(db_session),user=Depends(current_user)):
  item=db.get(SpectralRun,id)
  if not item:raise HTTPException(404,"运行不存在")
  return serialize(item)
+@router.post("/{id}/cancel")
+def cancel(id:str,db=Depends(db_session),user=Depends(writer)):return service.cancel(db,id,user)
+@router.post("/{id}/retry")
+def retry(id:str,db=Depends(db_session),user=Depends(writer)):return service.retry(db,id,user)

@@ -1,14 +1,24 @@
 from contextlib import asynccontextmanager
-import logging,redis
+import asyncio,logging,redis
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
-from src.config.database import engine
-from src.config.settings import SEED_DEMO,REDIS_URL
+from src.config.database import Session,engine
+from src.config.settings import SEED_DEMO,REDIS_URL,RUN_RECOVERY_SECONDS
 from src.middlewares.errors import ErrorMiddleware
 from src.middlewares.audit import AuditMiddleware
 from src.routes import auth,datasets,windows,studies,runs,reviews,reports,audit
+async def watch_leases():
+ """Backend-side safety net: a worker may die while holding a run. Every pass
+ requeues runs whose heartbeat stopped, so another worker can take over."""
+ from src.services.runs import recover
+ def pass_once():
+  with Session() as db:return recover(db,RUN_RECOVERY_SECONDS)
+ while True:
+  await asyncio.sleep(RUN_RECOVERY_SECONDS)
+  try:await asyncio.to_thread(pass_once)
+  except Exception:logging.exception("lease recovery failed")
 @asynccontextmanager
 async def lifespan(app):
  if SEED_DEMO:
@@ -16,7 +26,9 @@ async def lifespan(app):
    from scripts.seed_demo import seed
    seed()
   except Exception:logging.exception("seed failed")
- yield
+ task=asyncio.create_task(watch_leases())
+ try:yield
+ finally:task.cancel()
 app=FastAPI(title="北屿 · 链路抖动周期定位",lifespan=lifespan)
 @app.exception_handler(RequestValidationError)
 async def invalid_input(request,error):

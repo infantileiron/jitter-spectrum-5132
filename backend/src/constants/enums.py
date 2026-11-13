@@ -8,6 +8,7 @@ class RunStatus(str,Enum):
  running="running"
  completed="completed"
  failed="failed"
+ canceled="canceled"
 class Detrend(str,Enum):
  mean="mean"
  linear="linear"

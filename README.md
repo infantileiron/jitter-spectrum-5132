@@ -4,9 +4,9 @@
 
 ## 场景与工作日
 
-团队原先靠Excel折线肉眼找重复起伏，存在趋势掩盖周期、不规则采样误用FFT、峰值缺少频率口径三项痛点。上游为离线模拟链路时间观测；系统替代窗口核查、双谱计算与人工复核；下游是站内报告和峰值CSV，不自动调整通信设备。
+团队原先靠Excel折线肉眼找重复起伏，存在趋势掩盖周期、不规则采样误用FFT、峰值缺少频率口径三项痛点。上游为离线模拟链路时间观测；系统替代窗口核查、双谱计算与人工复核；下游是站内报告和峰值CSV，不自动调整通信设备。运行可排队、取消，执行者失联后自动接管：同一次运行只接受当前接管者写入的结果，取消后不再产生频谱；失败重试另建运行并保留原错误。
 
-09:00分析员登录；09:03查看 beiyu_jitter_202611.json 的6链路各480点；09:08选择BY-02的0—479分钟窗口；09:12声明去线性趋势、Hann窗和.005—.1每分钟的LS搜索网格；09:15提交Redis后台；09:18核查点数、实际跨度、规则性和Nyquist；09:22分别阅读FFT PSD和LS解释比例；09:27比较30/80分钟候选与原波形联合幅相；09:32复核缺采样案例的FFT不可用和LS结果；09:36管理员确认最新人工意见接受后归档；09:40只读账号下载真实峰值CSV。
+09:00分析员登录；09:03查看 beiyu_jitter_202611.json 的6链路各480点；09:08选择BY-02的0—479分钟窗口；09:12声明去线性趋势、Hann窗和.005—.1每分钟的LS搜索网格；09:15提交Redis后台并观察排队/计算状态；09:18核查点数、实际跨度、规则性和Nyquist；09:22分别阅读FFT PSD和LS解释比例；09:27比较30/80分钟候选与原波形联合幅相；09:32复核缺采样案例的FFT不可用和LS结果；09:36管理员确认最新人工意见接受后归档；09:40只读账号下载真实峰值CSV。
 
 |角色|页面|权限与典型动作|
 |---|---|---|
@@ -30,7 +30,7 @@ SEED_DEMO=true首次建表并幂等填充固定ID/自然键，不重复新增、
 
 ## 六实体与页面
 
-SignalDataset保留原始link_id/time_minutes/jitter_ms；SamplingWindow锁定链路、时间边界和实际点数；SpectralStudy保存去趋势、FFT窗、频率范围和LS网格；SpectralRun经Redis独立worker计算并持久化；PeriodReview记录人工判断与解释边界；Report仅在最新复核accepted后由admin归档，run唯一。
+SignalDataset保留原始link_id/time_minutes/jitter_ms；SamplingWindow锁定链路、时间边界和实际点数；SpectralStudy保存去趋势、FFT窗、频率范围和LS网格；SpectralRun经Redis独立worker计算并持久化，带尝试次数、执行者、心跳租约与取消/重试关联；PeriodReview记录人工判断与解释边界；Report仅在最新复核accepted后由admin归档，run唯一。
 
 六业务页：观测总览、带时间观测、采样窗口、频谱设置、周期与幅相、周期复核（含操作留痕）。实际原波形、残差、FFT、LS、峰表与联合幅相全部来自后端结果，前端只画数据。原始点先按时间稳定排序，连线只用于阅读，不表示重采样；表格预览30点，算法与图线使用全量窗口点。
 
@@ -65,19 +65,19 @@ FFT频率定义可对照 [NumPy rfft官方说明](https://numpy.org/doc/1.26/ref
 |前端|React18.3、TypeScript5.7、Vite6、Nginx1.28|
 |后端|Python3.11、FastAPI、SQLAlchemy、PyJWT、NumPy1.26.4|
 |持久化|PostgreSQL16，DOUBLE参数与JSON观测/结果|
-|后台|Redis7.4 AOF、独立Python worker，BLAS/OMP/MKL线程均1|
+|后台|Redis7.4 AOF、独立Python worker，BLAS/OMP/MKL线程均1；运行状态以PostgreSQL条件更新为准，Redis仅做队列与取消加速|
 
 frontend/src含api/stores/types/components/common/hooks/pages/router/utils/constants；backend/src含routes/controllers/services/models/schemas/middlewares/utils/constants/config；backend/scripts含seed，backend/migrations说明初次模型建表。测试、截图、日志、TESTING与verification在批次test-artifacts/gb-2307，源码不混入产物。
 
 后端本地安装requirements.txt，配置DATABASE_URL/REDIS_URL/JWT_SECRET并设置BLAS线程1，在backend执行`uvicorn src.main:app --reload`，另开`python -m src.worker`。前端`npm ci && npm run dev`；开发时将/api同源代理到19226，Docker Nginx已去前缀。React锁只改根包名和根package名，依赖节点原样，Docker用npm ci。
 
-环境：COMPOSE_PROJECT_NAME=jitter-spectrum；FRONTEND_PORT=18226；BACKEND_PORT=19226；DB_PORT=17726；JWT_SECRET；SEED_DEMO。DATABASE_URL/REDIS_URL由Compose传入；OPENBLAS_NUM_THREADS/OMP_NUM_THREADS/MKL_NUM_THREADS固定1。`.env`忽略，`.env.example`供复制。
+环境：COMPOSE_PROJECT_NAME=jitter-spectrum；FRONTEND_PORT=18226；BACKEND_PORT=19226；DB_PORT=17726；JWT_SECRET；SEED_DEMO；RUN_LEASE_SECONDS=30、RUN_HEARTBEAT_SECONDS=5、RUN_RECOVERY_SECONDS=10。DATABASE_URL/REDIS_URL由Compose传入；OPENBLAS_NUM_THREADS/OMP_NUM_THREADS/MKL_NUM_THREADS固定1。`.env`忽略，`.env.example`供复制。
 
-共享枚举角色/运行状态/去趋势/FFT窗在backend/src/constants/enums.py与frontend/src/constants/enums.ts；角色规则在controllers/auth.py和App，状态由services/runs.py/worker.py更新、Status组件消费；去趋势与窗由schemas/study.py验证、Studies页输入并由preprocessing/fft消费。复核decision在schemas/review.py与前端constants，Reviews页展示。
+共享枚举角色/运行状态/去趋势/FFT窗在backend/src/constants/enums.py与frontend/src/constants/enums.ts；角色规则在controllers/auth.py和App，状态由services/runs.py/worker.py更新、Status与RunLifecycle组件消费；核对取消、重试与失联接管；去趋势与窗由schemas/study.py验证、Studies页输入并由preprocessing/fft消费。复核decision在schemas/review.py与前端constants，Reviews页展示。
 
 ## 已知边界
 
-两谱不是同一种功率尺度，不能仅凭峰高相互验证。有限跨度、窗泄漏、频率网格、采样模式和趋势预处理都会影响候选；没有置信区间、FAP或因果诊断。幅相以首观测为原点，改变窗口会改变相位。JSON表单导入，无CSV解析器。单worker启动恢复queued/running，无分布式租约；初次SQLAlchemy建表，无生产迁移回滚。Google Fonts使用Noto Sans SC/IBM Plex Mono，不可用时回退。开发密钥和演示账号供本地模拟。
+两谱不是同一种功率尺度，不能仅凭峰高相互验证。有限跨度、窗泄漏、频率网格、采样模式和趋势预处理都会影响候选；没有置信区间、FAP或因果诊断。幅相以首观测为原点，改变窗口会改变相位。JSON表单导入，无CSV解析器。worker启动时恢复queued并接管心跳超时的running；租约为PostgreSQL行级条件更新（非Redis分布式锁）：心跳超时后由backend/worker的恢复循环接管，旧执行者迟到结果被丢弃；多执行者并发领取同一排队项只有一个成功。初次SQLAlchemy建表；既有库需先执行migrations新增的运行生命周期列，无生产迁移回滚。Google Fonts使用Noto Sans SC/IBM Plex Mono，不可用时回退。开发密钥和演示账号供本地模拟。
 
 测试脚本algorithm_oracle.py在宿主没有NumPy时会把同一手算oracle经stdin交给已启动backend容器执行；需先up栈，不额外安装宿主依赖。
 
